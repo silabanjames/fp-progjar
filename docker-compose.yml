@@ -1,0 +1,106 @@
+version: '3'
+services:
+  chatserver1:
+    image: python:3.11.3-alpine3.17 
+    restart: unless-stopped
+    volumes:
+    - ./app/server1:/app/
+    environment: 
+    - SERVER_IP=0.0.0.0
+    - SERVER_PORT=8889
+    - SERVER_IP_OTHER=chatserver2
+    - SERVER_PORT_OTHER=8890
+    working_dir: /app
+    ports:
+    - 8889:8889
+    # - 8890:8890
+    # - 8550:8550
+    # - 8552:8552
+    command:
+    - /bin/sh
+    - -c
+    - 'cd /app && pip3 install -r requirements.txt && python3 server.py'
+    networks:
+      - progjarnet
+
+  chatserver2:
+    image: python:3.11.3-alpine3.17 
+    restart: unless-stopped
+    volumes:
+    - ./app/server2:/app
+    environment: 
+    - SERVER_IP=0.0.0.0
+    - SERVER_PORT=8890
+    - SERVER_IP_OTHER=chatserver1
+    - SERVER_PORT_OTHER=8889
+    working_dir: /app
+    ports:
+    # - 8889:8889
+    - 8890:8890
+    # - 8550:8550
+    # - 8552:8552
+    command:
+    - /bin/sh
+    - -c
+    - 'cd /app && pip3 install -r requirements.txt && python3 server.py'
+    networks:
+      - progjarnet
+
+  chatclient1:
+    image: python:3.11.3-alpine3.17 
+    restart: unless-stopped
+    environment:
+      - SERVER_IP=chatserver1
+      - SERVER_PORT=8889
+      - ONWEB=1
+    working_dir: /app
+    ports:
+    # - 8889:8889
+    # - 8890:8890
+    - 8550:8550
+    # - 8552:8552
+    volumes:
+    - ./app/client1:/app
+    command:
+    - /bin/sh
+    - -c
+    - 'cd /app && pip3 install -r requirements.txt && python3 chat-flet.py'
+    depends_on:
+    - chatserver1
+#    deploy:
+#      mode: replicated
+#      replicas: 1
+    networks:
+      - progjarnet
+
+  chatclient2:
+    image: python:3.11.3-alpine3.17 
+    restart: unless-stopped
+    environment:
+      - SERVER_IP=chatserver2
+      - SERVER_PORT=8890
+      - ONWEB=1
+    working_dir: /app
+    ports:
+    # - 8889:8889
+    # - 8890:8890
+    # - 8550:8550
+    - 8552:8552
+    volumes:
+    - ./app/client2:/app
+    command:
+    - /bin/sh
+    - -c
+    - 'cd /app && pip3 install -r requirements.txt && python3 chat-flet.py'
+    depends_on:
+    - chatserver2
+#    deploy:
+#      mode: replicated
+#      replicas: 1
+    networks:
+      - progjarnet
+networks:
+  progjarnet:
+    ipam:
+      config:
+        - subnet: 172.222.221.0/24
