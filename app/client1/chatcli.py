@@ -116,30 +116,36 @@ class ChatClient:
             return "Error, {}" . format(result['message'])
         
     def get(self, filename):
-        if (self.tokenid==""):
-            return "Error, not authorized"
-        string = "get {} {} \r\n".format(self.tokenid, filename)
-        result = self.sendstring(string)
-        if result['status'] == 'OK':
-            with open(filename, 'wb+') as fp:
-                filecontent = base64.b64decode(result['file'])
-                fp.write(filecontent)
-            result.pop('file')
-            return "{}".format(result['message'])
-        else:
-            return "Error, {}".format(result['message'])
+        try:
+            if (self.tokenid==""):
+                return "Error, not authorized"
+            string = "get {} {} \r\n".format(self.tokenid, filename)
+            result = self.sendstring(string)
+            if result['status'] == 'OK':
+                with open(filename, 'wb+') as fp:
+                    filecontent = base64.b64decode(result['file'])
+                    fp.write(filecontent)
+                result.pop('file')
+                return "{}".format(result['message'])
+            else:
+                return "Error, {}".format(result['message'])
+        except Exception as e:
+            return "Error, {}".format(e)
     
     def upload(self, filename):
-        if (self.tokenid==""):
-            return "Error, not authorized"
-        with open(filename, 'rb') as fp:
-            filecontent = base64.b64encode(fp.read()).decode()
-        string = "upload {} {} {} \r\n".format(self.tokenid, filename, filecontent)
-        result = self.sendstring(string)
-        if result['status'] == 'OK':
-            return "{}".format(result['message'])
-        else:
-            return "Error, {}".format(result['message'])
+        try:
+            if (self.tokenid==""):
+                return "Error, not authorized"
+            with open(filename, 'rb') as fp:
+                filecontent = base64.b64encode(fp.read()).decode()
+            string = "upload {} {} {} \r\n".format(self.tokenid, filename, filecontent)
+            result = self.sendstring(string)
+            if result['status'] == 'OK':
+                return "{}".format(result['message'])
+            else:
+                return "Error, {}".format(result['message'])
+        except Exception as e:
+            return "Error, {}".format(e)
 
 
     def groupChat(self, namagrup):

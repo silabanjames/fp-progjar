@@ -47,11 +47,6 @@ def main(page):
             txt = cc.proses(txt)
             if txt == 'masuk':
                 cmd.value=''
-                # sock = cc.sock
-                # lv.controls.append(ft.Text(
-                #     f"socketnya adalah  = {sock}",
-                #     color = ft.colors.RED 
-                # ))
 
                 receiveThread = Thread(target=client_received, args=())
                 receiveThread.start()
