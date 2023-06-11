@@ -1,9 +1,8 @@
 import socket
 import os
 import json
+import base64
 from threading import Thread
-
-import flet as ft
 
 TARGET_IP = os.getenv("SERVER_IP") or "127.0.0.1"
 TARGET_PORT = os.getenv("SERVER_PORT") or "8889"
@@ -24,7 +23,7 @@ class ChatClient:
             receivemsg = ""
             while True:
                 data = self.sock.recv(64)
-                print("diterima dari server",data)
+                # print("diterima dari server",data)
                 if (data):
                     receivemsg = "{}{}" . format(receivemsg,data.decode())  #data harus didecode agar dapat di operasikan dalam bentuk string
                     if receivemsg[-4:]=='\r\n\r\n':
@@ -40,8 +39,6 @@ class ChatClient:
             message = self.sock.recv(1024).decode()
             if message != 'exit':
                 print(message)
-                lv = ft.ListView(expand=1, spacing=10, padding=20, auto_scroll=True)
-                lv.controls.append(ft.Text(f"{message}"))
             else:
                 break
 
@@ -61,6 +58,13 @@ class ChatClient:
                 username=j[1].strip()
                 password=j[2].strip()
                 return self.login(username,password)
+            elif (command=='regis'):
+                username=j[1].strip()
+                nama1=j[2].strip()
+                nama2=j[3].strip()
+                negara=j[4].strip()
+                password=j[5].strip()
+                return self.registration(username, nama1, nama2, negara, password)
             elif (command=='send'):
                 usernameto = j[1].strip()
                 message=""
@@ -69,8 +73,14 @@ class ChatClient:
                 return self.sendmessage(usernameto,message)
             elif (command=='inbox'):
                 return self.inbox()
+            elif (command=='get'):
+                return self.get(j[1])
+            elif (command=='upload'):
+                return self.upload(j[1])
             elif (command=='group'):
                 return self.groupChat(j[1])
+            elif (command=='logout'):
+                return self.logout()
             else:
                 return "*Maaf, command tidak benar"
         except IndexError:
@@ -94,6 +104,7 @@ class ChatClient:
             return "message sent to {}" . format(usernameto)
         else:
             return "Error, {}" . format(result['message'])
+
     def inbox(self):
         if (self.tokenid==""):
             return "Error, not authorized"
@@ -103,19 +114,39 @@ class ChatClient:
             return "{}" . format(json.dumps(result['messages']))
         else:
             return "Error, {}" . format(result['message'])
+        
+    def get(self, filename):
+        if (self.tokenid==""):
+            return "Error, not authorized"
+        string = "get {} {} \r\n".format(self.tokenid, filename)
+        result = self.sendstring(string)
+        if result['status'] == 'OK':
+            with open(filename, 'wb+') as fp:
+                filecontent = base64.b64decode(result['file'])
+                fp.write(filecontent)
+            result.pop('file')
+            return "{}".format(result['message'])
+        else:
+            return "Error, {}".format(result['message'])
+    
+    def upload(self, filename):
+        if (self.tokenid==""):
+            return "Error, not authorized"
+        with open(filename, 'rb') as fp:
+            filecontent = base64.b64encode(fp.read()).decode()
+        string = "upload {} {} {} \r\n".format(self.tokenid, filename, filecontent)
+        result = self.sendstring(string)
+        if result['status'] == 'OK':
+            return "{}".format(result['message'])
+        else:
+            return "Error, {}".format(result['message'])
+
 
     def groupChat(self, namagrup):
         if (self.tokenid==""):
             return "Error, not authorized"
         string='group {} {} origin \r\n'.format(self.tokenid, namagrup)
         self.sock.sendall(string.encode())
-
-        receiveThread = Thread(target=self.client_received, args=())
-        sendThread = Thread(target=self.client_send, args=())
-        receiveThread.start()
-        sendThread.start()
-        receiveThread.join()
-        sendThread.join()
 
         try:
             receivemsg = ""
@@ -129,14 +160,35 @@ class ChatClient:
                         receivemsg = json.loads(receivemsg)
                         break
         except:
-            self.sock.close()
+            # self.sock.close()
             receivemsg = { 'status' : 'ERROR', 'message' : 'Gagal'}
         
         if receivemsg['status']=='OK':
-            return "{}".format(receivemsg['message'])
+            # return "{}".format(receivemsg['message'])
+            return 'masuk'
         else:
-            return "Error, {}".format(receivemsg['message'])
+            return "error"
 
+    def logout(self):
+        if (self.tokenid==""):
+            return "Error, not authorized"
+        string = "logout {} \r\n".format(self.tokenid)
+        hasil = self.sendstring(string)
+
+        if hasil['status'] == 'OK':
+            self.tokenid=""
+            return hasil['message']
+        else:
+            return "Error, {}".format(hasil['message'])
+    
+    def registration(self, username, nama1, nama2, negara, password):
+        string="regis {} {} {} {} {} \r\n".format(username, nama1, nama2, negara, password)
+        hasil = self.sendstring(string)
+
+        if hasil['status'] == 'OK':
+            return hasil['message']
+        else:
+            return 'Error, {}'.format(hasil['message'])
 
 
 if __name__=="__main__":

@@ -61,7 +61,7 @@ class ProcessTheClient(threading.Thread):
 	# Fungsi melakukan pencarian grup ke server sebelah
 	def groupToOtherServer(self, otherserver_connection, client_connection, data):
 		logging.warning('Isi data sebelum dikirim ke server sebelah = {}'.format(data))
-        # mengambil nilai username
+		# mengambil nilai username
 		j=data.split(" ")
 		username = j[2]
 		otherserver_connection.sendall(data.encode())
@@ -74,18 +74,16 @@ class ProcessTheClient(threading.Thread):
 				d = data.decode()
 				rcv += d
 				if '\r\n\r\n' in rcv:
+					print('data rcv yang diterima dari server lain adalah', rcv)
 					return rcv
-				elif username in rcv:
-					# //terima chat dengan membuat thread
-					client_connection.sendall(rcv.encode())
-					rcv=""
-					# Buat thread untuk menerima broadcast server sebelah
-					send_from_otherserver = threading.Thread(target=self.client_send, args=(otherserver_connection, client_connection))
-					received_from_otherserver = threading.Thread(target=self.otherserver_received, args=(otherserver_connection, client_connection))
-					received_from_otherserver.start()
-					send_from_otherserver.start()
-					received_from_otherserver.join()
-					send_from_otherserver.join()
+
+	def connectGroupClientOtherServer(self, otherserver_connection, client_connection):
+		send_from_otherserver = threading.Thread(target=self.client_send, args=(otherserver_connection, client_connection))
+		received_from_otherserver = threading.Thread(target=self.otherserver_received, args=(otherserver_connection, client_connection))
+		received_from_otherserver.start()
+		send_from_otherserver.start()
+		received_from_otherserver.join()
+		send_from_otherserver.join()
 	
 	# Fungsi ketika melakukan komunikasi grup dari server sebelah ke client
 	def otherserver_received(self, otherserver_socket, client_socket):
@@ -129,6 +127,11 @@ class ProcessTheClient(threading.Thread):
 						hasil += '\r\n\r\n'
 						logging.warning("balas ke  client: {}" . format(hasil))
 						self.client_connection.sendall(hasil.encode())
+
+						j=rcv.split(" ")
+						username = j[1]
+						groupname = j[2]
+						chatserver.group_with_flet(groupname, username, self.client_connection)
 					
 					#### Pengecekan ini dilakukan ketika datang dari client
 					else:
@@ -172,10 +175,13 @@ class ProcessTheClient(threading.Thread):
 									hasil += '\r\n\r\n'
 									self.client_connection.sendall(hasil.encode())
 									rcv =""
+									print('Menghubungkan client dengan grup other server...')
+									self.connectGroupClientOtherServer(otherserver_connection, self.client_connection)
 								else:
 									# Jika nama group yang dicari tidak ada di server lain
 									rcv = rcv.replace(username, cekmsg[1]) # Mengganti usernam menjadi sessionID
 									rcv = rcv.replace(cekmsg[3], 'comeback') # mengganti state pesan
+									groupname = cekmsg[2]
 									logging.warning(f"Tidak ada grup {cekmsg[2]} di server sebelah, lakukan pembuatan grup baru")
 									hasil = chatserver.proses(rcv, self.client_connection)
 									hasil = json.dumps(hasil)
@@ -183,6 +189,8 @@ class ProcessTheClient(threading.Thread):
 									logging.warning("balas ke  client: {}" . format(hasil))
 									self.client_connection.sendall(hasil.encode())
 									rcv=""
+									print('Membuak komunikasi dengan flet')
+									chatserver.group_with_flet(groupname, username, self.client_connection)
 							else:
 								# Ketika sessionID tidak valid
 								hasil = json.dumps(hasilchat)
@@ -190,6 +198,17 @@ class ProcessTheClient(threading.Thread):
 								logging.warning("balas ke  client: {}" . format(hasil))
 								self.client_connection.sendall(hasil.encode())
 								rcv=""
+						elif command=='group' and hasilchat['status'] == 'OK':
+							username = chatserver.sessions[cekmsg[1]]['username']
+							print('nama grup adalah = ', cekmsg[2])
+							groupname = cekmsg[2]
+							hasil = json.dumps(hasilchat)
+							hasil=hasil+"\r\n\r\n"
+							logging.warning("balas ke  client: {}" . format(hasil))
+							self.client_connection.sendall(hasil.encode())
+							rcv=""
+							print('Membuak komunikasi dengan flet')
+							chatserver.group_with_flet(groupname, username, self.client_connection)
 						else:
 							# Jika command tidak berkaitan dengan send (kecuali berhasil menemukan username tujuan) 
 							# dan group (kecuali berhasil menemukan groupname)

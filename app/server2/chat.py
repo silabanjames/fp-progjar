@@ -1,6 +1,7 @@
 import sys
 import os
 import json
+import base64
 import uuid
 import logging
 from queue import  Queue
@@ -74,6 +75,17 @@ class Chat:
 				password=j[2].strip()
 				logging.warning("AUTH: auth {} {}" . format(username,password))
 				return self.autentikasi_user(username,password)
+			elif (command == "regis"):
+				logging.warning("REGIS: registration new user")
+				username=j[1]
+				nama1=j[2]
+				nama2=j[3]
+				negara=j[4]
+				password=j[5]
+				return self.registration(username, nama1, nama2, negara, password)
+			elif (command=='logout'):
+				sessionid = j[1].strip()
+				return self.logout(sessionid)
 			elif (command=='send'):
 				sessionid = j[1].strip()
 				usernameto = j[2].strip()
@@ -88,6 +100,20 @@ class Chat:
 				username = self.sessions[sessionid]['username']
 				logging.warning("INBOX: {}" . format(sessionid))
 				return self.get_inbox(username)
+			elif (command=='get'):
+				sessionid = j[1].strip()
+				if sessionid not in self.sessions:
+					return {'status': 'ERROR', 'message': 'Session tidak ditemukan'}
+				params = [x for x in j[2:]]
+				logging.warning('GET: session {} download file {}'.format(sessionid, params[0]))
+				return self.get_file(params)
+			elif (command=='upload'):
+				sessionid = j[1].strip()
+				if sessionid not in self.sessions:
+					return {'status': 'ERROR', 'message': 'Session tidak ditemukan'}
+				params = [x for x in j[2:]]
+				logging.warning('UPLOAD: session {} upload file {}'.format(sessionid, params[0]))
+				return self.upload_file(params)
 			elif (command=='group'):
 				sessionid = j[1]
 				groupname = j[2]
@@ -104,6 +130,23 @@ class Chat:
 			return { 'status': 'ERROR', 'message' : 'Informasi tidak ditemukan'}
 		except IndexError:
 			return {'status': 'ERROR', 'message': '--Protocol Tidak Benar'}
+	
+	def logout(self, sessionid):
+		if sessionid not in self.sessions:
+			return {'status': 'ERROR', 'message': 'Session tidak ditemukan'}
+		self.sessions.pop(sessionid)
+		return {'status': 'OK', 'message': 'Berhasil log out'}
+
+	def registration(self, username, nama1, nama2, negara, password):
+		# Urutan input yang diminta: username, nama, negara, password
+		try:
+			print("REGIS: get username =",username)
+			if username in self.users:
+				return {'status': 'ERROR', 'message': 'Username telah digunakan'}
+			self.users[username] = {'nama': f'{nama1} {nama2}', 'negara': negara, 'password':password, 'incoming':{}, 'outgoing':{}}
+			return {'status': 'OK', 'message': 'Pendaftaran berhasil'}
+		except Exception as e:
+			return {'status': 'ERROR', 'message': f'e'}	
 
 	def autentikasi_user(self,username,password):
 		if (username not in self.users):
@@ -153,6 +196,30 @@ class Chat:
 				msgs[users].append(s_fr['incoming'][users].get_nowait())
 		return {'status': 'OK', 'messages': msgs}
 	
+	def get_file(self, params=[]):
+		try:
+			filename = params[0]
+			if filename=='':
+				return {'status':'ERROR', 'message': 'Masukkan nama file'}
+			with open(f'files/{filename}', 'rb') as fp:
+				filecontent = base64.b64encode(fp.read()).decode()
+			print("Mengirim file Kembali")
+			return {'status': 'OK', 'message': 'File telah diterima', 'file':filecontent}
+		except Exception as e:
+			return {'status': 'ERROR', "message": f'{e}'}
+	
+	def upload_file(self, params=[]):
+		try:
+			filename = params[0]
+			isifile = base64.b64decode(params[1])
+			if filename == '' or isifile == '':
+				return {'status': 'ERROR', 'message': 'Tidak ada file yang dikirim'}
+			with open(f'files/{filename}', 'wb+') as fp:
+				fp.write(isifile)
+			return {'status': 'OK', 'message': 'File telah dikirim'}
+		except Exception as e:
+			return {'status': 'ERROR', 'message': f'{e}'}
+	
 	def group_chat(self, username, groupname, state, socket):
 		groups = self.groups
 		client = [username, socket]
@@ -163,12 +230,38 @@ class Chat:
 			# Jika nama grup tidak ada di server sebelah, buat grup baru
 			groups[groupname] = [client]
 		else:
+			sambutan = f"{username} telah bergabung"
+			self.broadcast(groupname, sambutan)
 			groups[groupname].append(client)
 
-		sambutan = f"{username} telah bergabung"
-		self.broadcast(groupname, sambutan)
+		return {'status': 'OK', 'message': f'Bergabung ke grup {username}'}
+
+		# sambutan = f"{username} telah bergabung"
+		# self.broadcast(groupname, sambutan)
+		# while True:
+		# 	try:
+		# 		chat = socket.recv(1024).decode()
+		# 		print(f"menerima pesan dari client = {chat}")
+		# 		if chat != 'exit':
+		# 			chat = f"{username}: {chat}"
+		# 			self.broadcast(groupname, chat)
+		# 		else:
+		# 			socket.send("exit".encode())
+		# 			self.exitGroup(groupname, client)
+		# 			print(f'user {username} telah keluar')
+		# 			self.broadcast(groupname, f"{username} meninggalkan group")
+		# 			break
+		# 	except:
+		# 		self.exitGroup(groupname, client)
+		# 		break
+		# if len(groups[groupname]) == 0:
+		# 	groups.pop(groupname)
+		# return {'status': 'OK', 'message': f'Telah keluar dari grup {groupname}'}
+	
+	def group_with_flet(self, groupname, username, socket):
 		while True:
 			try:
+				print('CHAT: Menunggu pesan client')
 				chat = socket.recv(1024).decode()
 				print(f"menerima pesan dari client = {chat}")
 				if chat != 'exit':
@@ -176,17 +269,13 @@ class Chat:
 					self.broadcast(groupname, chat)
 				else:
 					socket.send("exit".encode())
-					self.exitGroup(groupname, client)
+					self.exitGroup(groupname, [username, socket])
 					print(f'user {username} telah keluar')
 					self.broadcast(groupname, f"{username} meninggalkan group")
 					break
 			except:
-				self.exitGroup(groupname, client)
+				self.exitGroup(groupname, [username, socket])
 				break
-		if len(groups[groupname]) == 0:
-			groups.pop(groupname)
-		return {'status': 'OK', 'message': f'Telah keluar dari grup {groupname}'}
-
 
 if __name__=="__main__":
 	j = Chat()

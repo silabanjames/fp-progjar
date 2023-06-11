@@ -1,229 +1,298 @@
-from socket import *
-import socket
-import threading
-import time
 import sys
-import json
-import logging
 import os
-from chat import Chat
+import json
+import base64
+import uuid
+import logging
+from queue import  Queue
 
-SERVER_IP=os.getenv('SERVER_IP') or "0.0.0.0"
-SERVER_PORT=os.getenv('SERVER_PORT') or "8890"
-SERVER_IP_OTHER= os.getenv('SERVER_IP_OTHER') or "0.0.0.0"
-SERVER_PORT_OTHER= os.getenv('SERVER_PORT_OTHER') or "8889"
-otherserver_address = (SERVER_IP_OTHER, 8889)
-
-chatserver = Chat()
-
-class ProcessTheClient(threading.Thread):
-    def __init__(self, client_connection, client_address):
-        self.client_connection = client_connection
-        self.client_address = client_address
-        threading.Thread.__init__(self)
-
-    # Membuat koneksi dengan server sebelah
-    def make_otherserver_socket(self, server_address):
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            logging.warning(f"connecting to {server_address}")
-            sock.connect(server_address)
-            return sock
-        except Exception as ee:
-            logging.warning(f"error {str(ee)}")
+class Chat:
+	def __init__(self):
+		self.groups={}
+		self.sessions={}
+		self.users = {}
+		self.users['james']={ 'nama': 'James Maranata', 'negara': 'Indonesia', 'password': 'medan', 'incoming' : {}, 'outgoing': {}}
+		self.users['jantuar']={ 'nama': 'Jantuar Silaban', 'negara': 'Russia', 'password': 'moskow', 'incoming': {}, 'outgoing': {}}
+		self.users['taeno']={ 'nama': 'Suzuki Taeno', 'negara': 'Jepang', 'password': 'tokyo','incoming': {}, 'outgoing':{}}
 	
-	# Fungsi mengirim pesan ke server sebelah
-    def sendToOtherServer(self, otherserver_connection, data):
-        logging.warning('Isi data sebelum dikirim ke server sebelah = {}'.format(data))
-        otherserver_connection.sendall(data.encode())
-
-        rcv = ""
-        while True:
-            data = otherserver_connection.recv(32)
-
-            if data:
-                d = data.decode()
-                rcv += d
-                if '\r\n\r\n' in rcv:
-                    msg = rcv.strip()
-                    msg = json.loads(msg)
-                    if msg['status'] == 'OK':
-                        sendback = msg.pop('sendback')
-                        chatserver.write_outgoing(sendback)
-                        rcv = json.dumps(msg)
-                        rcv += '\r\n\r\n'
-                        return rcv
-                    else:
-                        rcv = json.dumps(msg)
-                        rcv += '\r\n\r\n'
-                        return rcv
+	##### Menulis pesan dari server lain
+	def write_incoming(self, data):
+		j=data.split(" ")
+		try:
+			usernamefrom = j[1].strip()
+			usernameto = j[2].strip()
+			message = ""
+			for w in j[3:]:
+				message="{} {}".format(message, w)
+			s_to = self.get_user(usernameto)
+			if (s_to==False):
+				return {'status': 'ERROR', 'message': 'User Tidak Ditemukan'}
+			message = { 'msg_from': usernamefrom, 'msg_to': s_to['nama'], 'msg': message }
+			inqueue_receiver= s_to['incoming']
+			try:
+				inqueue_receiver[usernamefrom].put(message)
+			except KeyError:
+				inqueue_receiver[usernamefrom]=Queue()
+				inqueue_receiver[usernamefrom].put(message)
+			return {'status': 'OK', 'message': 'Message Sent', 'sendback': message}
+		except IndexError:
+			return {'status': 'ERROR', 'message': '--Protocol Tidak Benar'}
 	
-	# Fungsi melakukan pencarian grup ke server sebelah
-    def groupToOtherServer(self, otherserver_connection, client_connection, data):
-        logging.warning('Isi data sebelum dikirim ke server sebelah = {}'.format(data))
-        # mengambil nilai username
-        j=data.split(" ")
-        username = j[2]
-        otherserver_connection.sendall(data.encode())
-        
-        rcv=""
-        while True:
-            data = otherserver_connection.recv(32)
-
-            if data:
-                d = data.decode()
-                rcv += d
-                if '\r\n\r\n' in rcv:
-                    print('data rcv yang diterima dari server lain adalah', rcv)
-                    return rcv
-                elif username in rcv:
-                    # //terima chat dengan membuat thread
-                    client_connection.sendall(rcv.encode())
-                    rcv=""
-                    # Buat thread untuk menerima broadcast server sebelah
-                    send_from_otherserver = threading.Thread(target=self.client_send, args=(otherserver_connection, client_connection))
-                    received_from_otherserver = threading.Thread(target=self.otherserver_received, args=(otherserver_connection, client_connection))
-                    received_from_otherserver.start()
-                    send_from_otherserver.start()
-                    received_from_otherserver.join()
-                    send_from_otherserver.join()
+	##### Menulis history pesan setelah mengirim pesan ke server lain
+	def write_outgoing(self, data):
+		usernamefrom = data['msg_from']
+		outqueue_sender = self.get_user(usernamefrom)
+		try:	
+			outqueue_sender[usernamefrom].put(data)
+		except KeyError:
+			outqueue_sender[usernamefrom]=Queue()
+			outqueue_sender[usernamefrom].put(data)
 	
-    # Fungsi ketika melakukan komunikasi grup dari server sebelah ke client
-    def otherserver_received(self, otherserver_socket, client_socket):
-        while True:
-            message = otherserver_socket.recv(1024).decode()
-            client_socket.sendall(message.encode())
-            if message == 'exit':
-                break
+	##### Request group dari server lain
+	def groupOtherServer(self, socket, data):
+		j=data.split(" ")
+		username = j[1]
+		groupname = j[2]
+		state = j[3]
+		hasil = self.group_chat(username, groupname, state, socket)
+		return hasil
+	
+	##### Fungsi tambahan untuk group_chat()
+	def broadcast(self, groupname, data):
+		for c in self.groups[groupname]:          
+			c[1].sendall(data.encode())
 
-    # Fungsi ketika melakukan komunikasi grup dari client ke server sebelah
-    def client_send(self, otherserver_socket, client_socket):
-        while True:
-            message = client_socket.recv(1024).decode()
-            otherserver_socket.sendall(message.encode())
-            if message == 'exit':
-                break
+	def exitGroup(self, groupname, client):
+		self.groups[groupname].remove(client)
+	##### -----
 
-    def run(self):
-        rcv=""
-        kirim_balik = ''
-        while True:
-            data = self.client_connection.recv(32)
-            if data:
-                d = data.decode()
-                rcv=rcv+d
-                if rcv[-2:]=='\r\n':
-                    #end of command, proses string
-                    ##### Pengecekan ini dilakukan jika data datang dari server sebelah
-                    if 'server' in rcv:
-                        rcv = rcv.replace('server ', '')
-                        hasil = json.dumps(chatserver.write_incoming(rcv))
-                        hasil += '\r\n\r\n'
-                        logging.warning("balas ke  client: {}" . format(hasil))
-                        self.client_connection.sendall(hasil.encode())
-                        rcv=""
-                    
-                    ##### Pengecekan ini dilakukan jika data datang dari server sebelah
-                    elif 'check' in rcv:
-                        rcv = rcv.replace('check ', '')
-                        hasil = json.dumps(chatserver.groupOtherServer(self.client_connection, rcv))
-                        hasil += '\r\n\r\n'
-                        logging.warning("balas ke  client: {}" . format(hasil))
-                        self.client_connection.sendall(hasil.encode())
-                    
-                    #### Pengecekan ini dilakukan ketika datang dari client
-                    else:
-                        logging.warning("data dari client: {}" . format(rcv))
-                        cekmsg = rcv.split(" ")
-                        command = cekmsg[0].strip()
-                        hasilchat = chatserver.proses(rcv, self.client_connection)
-                        if command == 'send' and hasilchat['status'] == 'ERROR':
-                            username = chatserver.sessions[cekmsg[1]]['username']
-                            if username:
-                                # Ketika tidak ada user destinasi di server, lakukan pencarian ke server sebelah
-                                rcv = rcv.replace(cekmsg[1], username)
-                                pesan_ke_server_lain = 'server ' + rcv
-                                otherserver_connection = self.make_otherserver_socket(otherserver_address)
-                                hasil = self.sendToOtherServer(otherserver_connection, pesan_ke_server_lain)
-                                logging.warning("balas ke  client: {}" . format(hasil))
-                                self.client_connection.sendall(hasil.encode())
-                                rcv=""
-                            else:
-                                # Ketika sessionID yang dimiliki tidak ada / tidak valid
-                                hasil = json.dumps(hasilchat)
-                                hasil=hasil+"\r\n\r\n"
-                                logging.warning("balas ke  client: {}" . format(hasil))
-                                self.client_connection.sendall(hasil.encode())
-                                rcv=""
-                        elif command=='group' and hasilchat['status'] == 'PENDING':
-                            username = chatserver.sessions[cekmsg[1]]['username']
-                            if username:
-                                # Ketika tidak ada group di server, lakukan pengecekan di server sebelah
-                                rcv = rcv.replace(cekmsg[1], username)
-                                # mengganti state
-                                rcv = rcv.replace(cekmsg[3], 'other')
-                                cekmsg[3] = 'other'
-                                pesan_ke_server_lain = 'check ' + rcv
-                                otherserver_connection = self.make_otherserver_socket(otherserver_address)
-                                hasil = self.groupToOtherServer(otherserver_connection, self.client_connection, pesan_ke_server_lain)
-                                hasil = json.loads(hasil)
-                                if hasil['status'] == 'OK':
-                                    # Jika nama group yang dicari ada di server sebelah dan telah melakukan komunikasi
-                                    hasil = json.dumps(hasil)
-                                    hasil += '\r\n\r\n'
-                                    self.client_connection.sendall(hasil.encode())
-                                    rcv =""
-                                else:
-                                    # Jika nama group yang dicari tidak ada di server lain
-                                    rcv = rcv.replace(username, cekmsg[1]) # Mengganti usernam menjadi sessionID
-                                    rcv = rcv.replace(cekmsg[3], 'comeback') # mengganti state pesan
-                                    logging.warning(f"Tidak ada grup {cekmsg[2]} di server sebelah, lakukan pembuatan grup baru")
-                                    hasil = chatserver.proses(rcv, self.client_connection)
-                                    hasil = json.dumps(hasil)
-                                    hasil = hasil + '\r\n\r\n'
-                                    logging.warning("balas ke  client: {}" . format(hasil))
-                                    self.client_connection.sendall(hasil.encode())
-                                    rcv=""
-                            else:
-                                # Ketika sessionID tidak valid
-                                hasil = json.dumps(hasilchat)
-                                hasil=hasil+"\r\n\r\n"
-                                logging.warning("balas ke  client: {}" . format(hasil))
-                                self.client_connection.sendall(hasil.encode())
-                                rcv=""
-                        else:
-                            # Jika command tidak berkaitan dengan send (kecuali berhasil menemukan username tujuan) 
-                            # dan group (kecuali berhasil menemukan groupname)
-                            hasil = json.dumps(hasilchat)
-                            hasil=hasil+"\r\n\r\n"
-                            logging.warning("balas ke  client: {}" . format(hasil))
-                            self.client_connection.sendall(hasil.encode())
-                            rcv=""
-            else:
-                break
-        self.client_connection.close()
+	def proses(self, data, socket=[]):
+		j=data.split(" ")
+		try:
+			command=j[0].strip()
+			if (command=='auth'):
+				username=j[1].strip()
+				password=j[2].strip()
+				logging.warning("AUTH: auth {} {}" . format(username,password))
+				return self.autentikasi_user(username,password)
+			elif (command == "regis"):
+				logging.warning("REGIS: registration new user")
+				username=j[1]
+				nama1=j[2]
+				nama2=j[3]
+				negara=j[4]
+				password=j[5]
+				return self.registration(username, nama1, nama2, negara, password)
+			elif (command=='logout'):
+				sessionid = j[1].strip()
+				return self.logout(sessionid)
+			elif (command=='send'):
+				sessionid = j[1].strip()
+				usernameto = j[2].strip()
+				message=""
+				for w in j[3:]:
+					message="{} {}" . format(message,w)
+				usernamefrom = self.sessions[sessionid]['username']
+				logging.warning("SEND: session {} send message from {} to {}" . format(sessionid, usernamefrom,usernameto))
+				return self.send_message(sessionid,usernamefrom,usernameto,message)
+			elif (command=='inbox'):
+				sessionid = j[1].strip()
+				username = self.sessions[sessionid]['username']
+				logging.warning("INBOX: {}" . format(sessionid))
+				return self.get_inbox(username)
+			elif (command=='get'):
+				sessionid = j[1].strip()
+				if sessionid not in self.sessions:
+					return {'status': 'ERROR', 'message': 'Session tidak ditemukan'}
+				params = [x for x in j[2:]]
+				logging.warning('GET: session {} download file {}'.format(sessionid, params[0]))
+				return self.get_file(params)
+			elif (command=='upload'):
+				sessionid = j[1].strip()
+				if sessionid not in self.sessions:
+					return {'status': 'ERROR', 'message': 'Session tidak ditemukan'}
+				params = [x for x in j[2:]]
+				logging.warning('UPLOAD: session {} upload file {}'.format(sessionid, params[0]))
+				return self.upload_file(params)
+			elif (command=='group'):
+				sessionid = j[1]
+				groupname = j[2]
+				state = j[3]
+				logging.warning("GROUP: {}".format(groupname))
+				username = self.sessions[sessionid]['username']
+				if username:
+					return self.group_chat(username, groupname, state, socket)
+				else:
+					return {'status': 'ERROR', 'message': 'Session Tidak Ditemukan'}
+			else:
+				return {'status': 'ERROR', 'message': '**Protocol Tidak Benar'}
+		except KeyError:
+			return { 'status': 'ERROR', 'message' : 'Informasi tidak ditemukan'}
+		except IndexError:
+			return {'status': 'ERROR', 'message': '--Protocol Tidak Benar'}
+	
+	def logout(self, sessionid):
+		if sessionid not in self.sessions:
+			return {'status': 'ERROR', 'message': 'Session tidak ditemukan'}
+		self.sessions.pop(sessionid)
+		return {'status': 'OK', 'message': 'Berhasil log out'}
 
-class Server(threading.Thread):
-    def __init__(self):
-        self.the_clients = []
-        self.my_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.my_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        threading.Thread.__init__(self)
+	def registration(self, username, nama1, nama2, negara, password):
+		# Urutan input yang diminta: username, nama, negara, password
+		try:
+			print("REGIS: get username =",username)
+			if username in self.users:
+				return {'status': 'ERROR', 'message': 'Username telah digunakan'}
+			self.users[username] = {'nama': f'{nama1} {nama2}', 'negara': negara, 'password':password, 'incoming':{}, 'outgoing':{}}
+			return {'status': 'OK', 'message': 'Pendaftaran berhasil'}
+		except Exception as e:
+			return {'status': 'ERROR', 'message': f'e'}	
 
-    def run(self):
-        self.my_socket.bind(('0.0.0.0',8890))
-        self.my_socket.listen(1)
-        while True:
-            self.connection, self.client_address = self.my_socket.accept()
-            logging.warning("connection from {}" . format(self.client_address))
-            clt = ProcessTheClient(self.connection, self.client_address)
-            clt.start()
-            self.the_clients.append(clt)
+	def autentikasi_user(self,username,password):
+		if (username not in self.users):
+			return { 'status': 'ERROR', 'message': 'User Tidak Ada' }
+		if (self.users[username]['password']!= password):
+			return { 'status': 'ERROR', 'message': 'Password Salah' }
+		tokenid = str(uuid.uuid4()) 
+		self.sessions[tokenid]={ 'username': username, 'userdetail':self.users[username]}
+		return { 'status': 'OK', 'tokenid': tokenid }
 
+	def get_user(self,username):
+		if (username not in self.users):
+			return False
+		return self.users[username]
 
-def main():
-	svr = Server()
-	svr.start()
+	def send_message(self,sessionid,username_from,username_dest,message):
+		if (sessionid not in self.sessions):
+			return {'status': 'ERROR', 'message': 'Session Tidak Ditemukan'}
+		s_fr = self.get_user(username_from)
+		s_to = self.get_user(username_dest)
+		
+		if (s_fr==False or s_to==False):
+			return {'status': 'ERROR', 'message': 'User Tidak Ditemukan'}
+
+		message = { 'msg_from': s_fr['nama'], 'msg_to': s_to['nama'], 'msg': message }
+		outqueue_sender = s_fr['outgoing']
+		inqueue_receiver = s_to['incoming']
+		try:	
+			outqueue_sender[username_from].put(message)
+		except KeyError:
+			outqueue_sender[username_from]=Queue()
+			outqueue_sender[username_from].put(message)
+		try:
+			inqueue_receiver[username_from].put(message)
+		except KeyError:
+			inqueue_receiver[username_from]=Queue()
+			inqueue_receiver[username_from].put(message)
+		return {'status': 'OK', 'message': 'Message Sent'}
+
+	def get_inbox(self,username):
+		s_fr = self.get_user(username)
+		incoming = s_fr['incoming']
+		msgs={}
+		for users in incoming:
+			msgs[users]=[]
+			while not incoming[users].empty():
+				msgs[users].append(s_fr['incoming'][users].get_nowait())
+		return {'status': 'OK', 'messages': msgs}
+	
+	def get_file(self, params=[]):
+		try:
+			filename = params[0]
+			if filename=='':
+				return {'status':'ERROR', 'message': 'Masukkan nama file'}
+			with open(f'files/{filename}', 'rb') as fp:
+				filecontent = base64.b64encode(fp.read()).decode()
+			print("Mengirim file Kembali")
+			return {'status': 'OK', 'message': 'File telah diterima', 'file':filecontent}
+		except Exception as e:
+			return {'status': 'ERROR', "message": f'{e}'}
+	
+	def upload_file(self, params=[]):
+		try:
+			filename = params[0]
+			isifile = base64.b64decode(params[1])
+			if filename == '' or isifile == '':
+				return {'status': 'ERROR', 'message': 'Tidak ada file yang dikirim'}
+			with open(f'files/{filename}', 'wb+') as fp:
+				fp.write(isifile)
+			return {'status': 'OK', 'message': 'File telah dikirim'}
+		except Exception as e:
+			return {'status': 'ERROR', 'message': f'{e}'}
+	
+	def group_chat(self, username, groupname, state, socket):
+		groups = self.groups
+		client = [username, socket]
+		if groupname not in groups and state != 'comeback':
+			# Jika nama grup tidak ada pada server
+			return {'status': 'PENDING', 'message': f'Tidak ada grup {groupname} di server'}
+		elif state == 'comeback':
+			# Jika nama grup tidak ada di server sebelah, buat grup baru
+			groups[groupname] = [client]
+		else:
+			sambutan = f"{username} telah bergabung"
+			self.broadcast(groupname, sambutan)
+			groups[groupname].append(client)
+
+		return {'status': 'OK', 'message': f'Bergabung ke grup {username}'}
+
+		# sambutan = f"{username} telah bergabung"
+		# self.broadcast(groupname, sambutan)
+		# while True:
+		# 	try:
+		# 		chat = socket.recv(1024).decode()
+		# 		print(f"menerima pesan dari client = {chat}")
+		# 		if chat != 'exit':
+		# 			chat = f"{username}: {chat}"
+		# 			self.broadcast(groupname, chat)
+		# 		else:
+		# 			socket.send("exit".encode())
+		# 			self.exitGroup(groupname, client)
+		# 			print(f'user {username} telah keluar')
+		# 			self.broadcast(groupname, f"{username} meninggalkan group")
+		# 			break
+		# 	except:
+		# 		self.exitGroup(groupname, client)
+		# 		break
+		# if len(groups[groupname]) == 0:
+		# 	groups.pop(groupname)
+		# return {'status': 'OK', 'message': f'Telah keluar dari grup {groupname}'}
+	
+	def group_with_flet(self, groupname, username, socket):
+		while True:
+			try:
+				print('CHAT: Menunggu pesan client')
+				chat = socket.recv(1024).decode()
+				print(f"menerima pesan dari client = {chat}")
+				if chat != 'exit':
+					chat = f"{username}: {chat}"
+					self.broadcast(groupname, chat)
+				else:
+					socket.send("exit".encode())
+					self.exitGroup(groupname, [username, socket])
+					print(f'user {username} telah keluar')
+					self.broadcast(groupname, f"{username} meninggalkan group")
+					break
+			except:
+				self.exitGroup(groupname, [username, socket])
+				break
 
 if __name__=="__main__":
-	main()
+	j = Chat()
+	sesi = j.proses("auth messi surabaya")
+	print(sesi)
+	#sesi = j.autentikasi_user('messi','surabaya')
+	#print sesi
+	tokenid = sesi['tokenid']
+	print(j.proses("send {} henderson hello gimana kabarnya son " . format(tokenid)))
+	print(j.proses("send {} messi hello gimana kabarnya mess " . format(tokenid)))
+
+	#print j.send_message(tokenid,'messi','henderson','hello son')
+	#print j.send_message(tokenid,'henderson','messi','hello si')
+	#print j.send_message(tokenid,'lineker','messi','hello si dari lineker')
+
+
+	print("isi mailbox dari messi")
+	print(j.get_inbox('messi'))
+	print("isi mailbox dari henderson")
+	print(j.get_inbox('henderson'))
